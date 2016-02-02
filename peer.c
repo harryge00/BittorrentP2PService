@@ -3,6 +3,7 @@
  *
  * Authors: Ed Bardsley <ebardsle+441@andrew.cmu.edu>,
  *          Dave Andersen
+            Haoyuan
  * Class: 15-441 (Spring 2005)
  *
  * Skeleton for 15-441 Project 2.
