@@ -1,15 +1,3 @@
-/*
- * peer.c
- *
- * Authors: Ed Bardsley <ebardsle+441@andrew.cmu.edu>,
- *          Dave Andersen
-            Haoyuan
- * Class: 15-441 (Spring 2005)
- *
- * Skeleton for 15-441 Project 2.
- *
- */
-
 #include <sys/types.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -58,12 +46,23 @@ void process_inbound_udp(int sock) {
 
   fromlen = sizeof(from);
   spiffy_recvfrom(sock, buf, BUFLEN, 0, (struct sockaddr *) &from, &fromlen);
+  //parsing recvBuf
+  unsigned short magic_number = ntohs(*(unsigned short*)buf);
+  unsigned char packet_version = *(unsigned char*)(buf+2);
+  unsigned char packet_type = *(unsigned char*)(buf+3);
+  unsigned short packet_header_len = ntohs(*(unsigned short*)(buf+4));
+  unsigned short packet_len = ntohs(*(unsigned short*)(buf+6));
+  unsigned int seq_number =ntohl(*(unsigned int*)(buf+8));
+  unsigned int ack_number = ntohl(*(unsigned int*)(buf+12));
 
+  printf("%d,%d,%d\n", magic_number, packet_version, packet_type);
+  printf("%d,%d\n", packet_header_len, packet_len); 
   printf("PROCESS_INBOUND_UDP SKELETON -- replace!\n"
 	 "Incoming message from %s:%d\n%s\n\n", 
 	 inet_ntoa(from.sin_addr),
 	 ntohs(from.sin_port),
 	 buf);
+  
 }
 
 void process_get(char *chunkfile, char *outputfile) {
