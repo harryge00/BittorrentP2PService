@@ -227,14 +227,12 @@ void parse_chunk_file(char* chunkfile) {
   }
   fseek(f, 0, SEEK_SET);
   has_chunk = (char*)malloc(chunk_number * SHA1_HASH_SIZE + 20);
-  // printf("%d %d\n", chunk_number, sizeof(has_chunk));
   while(fgets(line, 255, f) != NULL) {
     sscanf(line, "%d %s", &id, hash);
     hex2binary((char*)hash, SHA1_HASH_SIZE*2, binary_hash);
-    // printf("id:%d %d\n", id, sizeof(binary_hash));
-    memcpy(has_chunk + SHA1_HASH_SIZE * id, (char*)binary_hash, sizeof(binary_hash));
+    memcpy(has_chunk + 20 * (id - 1), (char*)binary_hash, sizeof(binary_hash));
   }
-  fclose(f);   
+   
 }
 
 void peer_run(bt_config_t *config) {
@@ -263,10 +261,11 @@ void peer_run(bt_config_t *config) {
     exit(-1);
   }
 
+  printf("config\n");
   spiffy_init(config->identity, (struct sockaddr *)&myaddr, sizeof(myaddr));
+  printf("config2\n");
 
   parse_chunk_file(config->has_chunk_file);
-  // printf("Ok");
   while (1) {
     int nfds;
     FD_SET(STDIN_FILENO, &readfds);

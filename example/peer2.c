@@ -16,32 +16,6 @@
 
 int sock;
 bt_config_t config;
-char* has_chunk;
-unsigned int chunk_number = 0;
-
-void fill_header(char* packet_header, unsigned char packet_type, 
-	unsigned short packet_length, unsigned int seq_number, unsigned int ack_number){
-	 #define HEADER_LENGTH 16
-  unsigned short magic_number = 15441;
-  unsigned char version_number = 1;
-  short header_length = 16;
-  *(unsigned short*)(packet_header) = htons(magic_number);
-  *(unsigned char*)(packet_header+2) = version_number;
-  *(unsigned char*)(packet_header+3) = packet_type;
-  *(unsigned short*)(packet_header+4) = htons(header_length);
-  *(unsigned short*)(packet_header+6) = htons(packet_length);
-  *(unsigned int*)(packet_header+8) = htonl(seq_number);
-  *(unsigned int*)(packet_header+12) = htonl(ack_number);
-}
-int find_chunk(uint8_t* hash){
-  int i = 0;
-  for(i = 0; i < chunk_number; i++){
-    if (memcmp(hash, has_chunk + i * SHA1_HASH_SIZE, SHA1_HASH_SIZE) == 0) {
-      return 1;
-    }
-  }
-  return -1;
-}
 
 void peer_run(bt_config_t *config);
 
@@ -74,7 +48,7 @@ void process_inbound_udp(int sock) {
   struct sockaddr_in from;
   socklen_t fromlen;
   char buf[BUFLEN];
-  char sendBuf[BUFLEN];
+
   fromlen = sizeof(from);
   spiffy_recvfrom(sock, buf, BUFLEN, 0, (struct sockaddr *) &from, &fromlen);
   //parsing recvBuf
@@ -93,26 +67,9 @@ void process_inbound_udp(int sock) {
 	 inet_ntoa(from.sin_addr),
 	 ntohs(from.sin_port),
 	 buf);
-  struct sockaddr* dst_addr;
   switch(packet_type) {
   	case WHOHAS:
   		printf("receive WHOHAS\n");
-  		char chunk_count = buf[16];
-  		char matched_count = 0;
-  		int i;
-  		for(i=0;i<chunk_count;i++) {
-	        uint8_t* hash = (uint8_t*)(buf+20 + i*SHA1_HASH_SIZE);
-	        if(find_chunk(hash)>0){
-	          memcpy(sendBuf + 20 + matched_count * SHA1_HASH_SIZE, hash, SHA1_HASH_SIZE);
-	          matched_count++;
-	        }
-	    }
-	    if(matched_count > 0) {
-	    	fill_header(sendBuf, IHAVE, 20 + SHA1_HASH_SIZE * matched_count, 0, 0);
-	    	sendBuf[16] = matched_count;
-	    	dst_addr = (struct sockaddr*)&from;
-	    	spiffy_sendto(sock, sendBuf, 20 + SHA1_HASH_SIZE * matched_count, 0, dst_addr, sizeof(*dst_addr));
-	    }
   		break;
   	case IHAVE:
   		printf("receive IHAVE\n");
@@ -135,13 +92,28 @@ void process_inbound_udp(int sock) {
   }
 }
 
+void fill_header(char* packet_header, unsigned char packet_type, 
+	unsigned short packet_length, unsigned int seq_number, unsigned int ack_number){
+	 #define HEADER_LENGTH 16
+  unsigned short magic_number = 15441;
+  unsigned char version_number = 1;
+  short header_length = 16;
+  *(unsigned short*)(packet_header) = htons(magic_number);
+  *(unsigned char*)(packet_header+2) = version_number;
+  *(unsigned char*)(packet_header+3) = packet_type;
+  *(unsigned short*)(packet_header+4) = htons(header_length);
+  *(unsigned short*)(packet_header+6) = htons(packet_length);
+  *(unsigned int*)(packet_header+8) = htonl(seq_number);
+  *(unsigned int*)(packet_header+12) = htonl(ack_number);
+}
+
 void process_get(char *chunkfile, char *outputfile) {
   printf("PROCESS GET SKELETON CODE CALLED.  Fill me in!  (%s, %s)\n", 
 	chunkfile, outputfile);
 
   char *sendBuf = (char*) malloc(BUFLEN);
 
-  unsigned short packet_length;
+  unsigned short packet_length = ntohs(*(unsigned short*)(sendBuf+6));
 
   FILE *f = fopen(chunkfile, "r");
   char line[255];
@@ -181,8 +153,6 @@ void process_get(char *chunkfile, char *outputfile) {
     }
   }
   fclose(f);
-  packet_length = 20 + 20 * chunk_count;
-  fill_header(sendBuf, WHOHAS, packet_length, 0, 0);
   *(sendBuf + 16) = chunk_count;
   // printf("chunk_count:%d, %s\n", sendBuf[16], sendBuf);
   	peer = config.peers;
@@ -213,29 +183,6 @@ void handle_user_input(char *line, void *cbdata) {
   }
 }
 
-void parse_chunk_file(char* chunkfile) {
-  FILE *f = fopen(chunkfile, "r");
-  char line[255];
-  uint8_t hash[SHA1_HASH_SIZE*2+1];
-  uint8_t binary_hash[SHA1_HASH_SIZE];
-  unsigned int id;
-  while (fgets(line, 255, f) != NULL) {
-    if (line[0] == '#'){
-      continue;
-    }
-    chunk_number++;
-  }
-  fseek(f, 0, SEEK_SET);
-  has_chunk = (char*)malloc(chunk_number * SHA1_HASH_SIZE + 20);
-  // printf("%d %d\n", chunk_number, sizeof(has_chunk));
-  while(fgets(line, 255, f) != NULL) {
-    sscanf(line, "%d %s", &id, hash);
-    hex2binary((char*)hash, SHA1_HASH_SIZE*2, binary_hash);
-    // printf("id:%d %d\n", id, sizeof(binary_hash));
-    memcpy(has_chunk + SHA1_HASH_SIZE * id, (char*)binary_hash, sizeof(binary_hash));
-  }
-  fclose(f);   
-}
 
 void peer_run(bt_config_t *config) {
 
@@ -262,11 +209,9 @@ void peer_run(bt_config_t *config) {
     perror("peer_run could not bind socket");
     exit(-1);
   }
-
+  
   spiffy_init(config->identity, (struct sockaddr *)&myaddr, sizeof(myaddr));
-
-  parse_chunk_file(config->has_chunk_file);
-  // printf("Ok");
+  
   while (1) {
     int nfds;
     FD_SET(STDIN_FILENO, &readfds);
