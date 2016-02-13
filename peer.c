@@ -262,6 +262,7 @@ void peer_run(bt_config_t *config) {
   }
   
   spiffy_init(config->identity, (struct sockaddr *)&myaddr, sizeof(myaddr));
+  
   parse_chunk_file(config->has_chunk_file);
   while (1) {
     int nfds;
