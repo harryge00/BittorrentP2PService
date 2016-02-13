@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "debug.h"
+#include "common.h"
 #include "spiffy.h"
 #include "bt_parse.h"
 #include "input_buffer.h"
@@ -37,7 +38,6 @@ int main(int argc, char **argv) {
   return 0;
 }
 
-
 void process_inbound_udp(int sock) {
   #define BUFLEN 1500
   struct sockaddr_in from;
@@ -62,12 +62,58 @@ void process_inbound_udp(int sock) {
 	 inet_ntoa(from.sin_addr),
 	 ntohs(from.sin_port),
 	 buf);
-  
+  switch(packet_type) {
+  	case WHOHAS:
+  		printf("receive WHOHAS\n");
+  		break;
+  	case IHAVE:
+  		printf("receive IHAVE\n");
+  		break;
+  	case GET:
+  		printf("receive GET\n");
+  		break;
+  	case DATA:
+  		printf("receive DATA\n");
+  		break;
+  	case ACK:
+  		printf("receive ACK\n");
+  		break;
+  	case DENIED:
+  		printf("receive DENIED\n");
+  		break;
+  	default:
+  		printf("Unexpected packet type!\n");
+
+  }
 }
+
+void fill_header(char** packet_header, unsigned char packet_type, 
+	unsigned short packet_length, unsigned int seq_number, unsigned int ack_number){
+	 #define HEADER_LENGTH 16
+  *packet_header = (char*)malloc(16);
+  unsigned short magic_number = MAGIC_NUMBER;
+  unsigned char version_number = VERSION_NUMBER;
+  short header_length = HEADER_LENGTH;
+  *(unsigned short*)(*packet_header) = htons(magic_number);
+  *(unsigned char*)(*packet_header+2) = version_number;
+  *(unsigned char*)(*packet_header+3) = packet_type;
+  *(unsigned short*)(*packet_header+4) = htons(header_length);
+  *(unsigned short*)(*packet_header+6) = htons(packet_length);
+  *(unsigned int*)(*packet_header+8) = htonl(seq_number);
+  *(unsigned int*)(*packet_header+12) = htonl(ack_number);
+}
+
+bt_config_t *tmp_config;
 
 void process_get(char *chunkfile, char *outputfile) {
   printf("PROCESS GET SKELETON CODE CALLED.  Fill me in!  (%s, %s)\n", 
 	chunkfile, outputfile);
+
+  char sendBuf[BUFLEN];
+  char **packet = &sendBuf;
+  fill_header(packet, WHOHAS, 60, 0, 0);
+  unsigned short packet_length = ntohs(*(unsigned short*)(sendBuf+6));
+  spiffy_sendto(socket, buffer, packet_length, 0, dst_addr, sizeof(*dst_addr));
 }
 
 void handle_user_input(char *line, void *cbdata) {
@@ -77,6 +123,7 @@ void handle_user_input(char *line, void *cbdata) {
   bzero(outf, sizeof(outf));
 
   if (sscanf(line, "GET %120s %120s", chunkf, outf)) {
+    printf("%s\n", line);
     if (strlen(outf) > 0) {
       process_get(chunkf, outf);
     }
@@ -85,6 +132,9 @@ void handle_user_input(char *line, void *cbdata) {
 
 
 void peer_run(bt_config_t *config) {
+	
+	tmp_config = config;
+
   int sock;
   struct sockaddr_in myaddr;
   fd_set readfds;
