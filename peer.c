@@ -6,15 +6,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include "debug.h"
+#include "chunk.h"
+
 #include "common.h"
 #include "spiffy.h"
 #include "bt_parse.h"
 #include "input_buffer.h"
+#define SHA1_HASH_SIZE 20
+
+int sock;
+bt_config_t config;
 
 void peer_run(bt_config_t *config);
 
 int main(int argc, char **argv) {
-  bt_config_t config;
 
   bt_init(&config, argc, argv);
 
@@ -91,9 +96,9 @@ void fill_header(char** packet_header, unsigned char packet_type,
 	unsigned short packet_length, unsigned int seq_number, unsigned int ack_number){
 	 #define HEADER_LENGTH 16
   *packet_header = (char*)malloc(16);
-  unsigned short magic_number = MAGIC_NUMBER;
-  unsigned char version_number = VERSION_NUMBER;
-  short header_length = HEADER_LENGTH;
+  unsigned short magic_number = 15441;
+  unsigned char version_number = 1;
+  short header_length = 16;
   *(unsigned short*)(*packet_header) = htons(magic_number);
   *(unsigned char*)(*packet_header+2) = version_number;
   *(unsigned char*)(*packet_header+3) = packet_type;
@@ -103,17 +108,46 @@ void fill_header(char** packet_header, unsigned char packet_type,
   *(unsigned int*)(*packet_header+12) = htonl(ack_number);
 }
 
-bt_config_t *tmp_config;
-
 void process_get(char *chunkfile, char *outputfile) {
   printf("PROCESS GET SKELETON CODE CALLED.  Fill me in!  (%s, %s)\n", 
 	chunkfile, outputfile);
 
   char sendBuf[BUFLEN];
-  char **packet = &sendBuf;
-  fill_header(packet, WHOHAS, 60, 0, 0);
+  fill_header(&sendBuf, WHOHAS, 60, 0, 0);
   unsigned short packet_length = ntohs(*(unsigned short*)(sendBuf+6));
-  spiffy_sendto(socket, buffer, packet_length, 0, dst_addr, sizeof(*dst_addr));
+
+  FILE *f = fopen(chunkfile, "r");
+  char line[255];
+  unsigned short chunk_count = 0;
+  unsigned int id;
+    uint8_t hash[SHA1_HASH_SIZE*2+1];
+  	uint8_t binary_hash[SHA1_HASH_SIZE];
+
+  while (fgets(line, 255, f) != NULL) {
+    if (line[0] == '#'){
+      continue;
+    }
+    sscanf(line, "%d %s", &id, hash);
+    hex2binary((char*)hash, SHA1_HASH_SIZE*2, binary_hash);
+    memcpy(sendBuf + 20 + 20 * chunk_count, (char*)binary_hash, sizeof(binary_hash));
+    chunk_count++;
+    if(chunk_count >= 74 ) {
+    	printf("should split packets\n");
+    }
+  }
+  fclose(f);
+  memcpy(sendBuf + 16, &chunk_count, sizeof(chunk_count));
+  struct bt_peer_s* peer = config.peers;
+    while(peer!=NULL) {
+        if(peer->id==config.identity){
+          peer = peer->next;
+        }
+        else{
+          struct sockaddr* dst_addr = (struct sockaddr*)&peer->addr;
+          spiffy_sendto(sock, sendBuf, packet_length, 0, dst_addr, sizeof(*dst_addr));
+          peer = peer->next;
+        }
+    }
 }
 
 void handle_user_input(char *line, void *cbdata) {
@@ -132,10 +166,7 @@ void handle_user_input(char *line, void *cbdata) {
 
 
 void peer_run(bt_config_t *config) {
-	
-	tmp_config = config;
 
-  int sock;
   struct sockaddr_in myaddr;
   fd_set readfds;
   struct user_iobuf *userbuf;
