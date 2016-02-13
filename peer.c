@@ -92,36 +92,38 @@ void process_inbound_udp(int sock) {
   }
 }
 
-void fill_header(char** packet_header, unsigned char packet_type, 
+void fill_header(char* packet_header, unsigned char packet_type, 
 	unsigned short packet_length, unsigned int seq_number, unsigned int ack_number){
 	 #define HEADER_LENGTH 16
-  *packet_header = (char*)malloc(16);
   unsigned short magic_number = 15441;
   unsigned char version_number = 1;
   short header_length = 16;
-  *(unsigned short*)(*packet_header) = htons(magic_number);
-  *(unsigned char*)(*packet_header+2) = version_number;
-  *(unsigned char*)(*packet_header+3) = packet_type;
-  *(unsigned short*)(*packet_header+4) = htons(header_length);
-  *(unsigned short*)(*packet_header+6) = htons(packet_length);
-  *(unsigned int*)(*packet_header+8) = htonl(seq_number);
-  *(unsigned int*)(*packet_header+12) = htonl(ack_number);
+  *(unsigned short*)(packet_header) = htons(magic_number);
+  *(unsigned char*)(packet_header+2) = version_number;
+  *(unsigned char*)(packet_header+3) = packet_type;
+  *(unsigned short*)(packet_header+4) = htons(header_length);
+  *(unsigned short*)(packet_header+6) = htons(packet_length);
+  *(unsigned int*)(packet_header+8) = htonl(seq_number);
+  *(unsigned int*)(packet_header+12) = htonl(ack_number);
 }
 
 void process_get(char *chunkfile, char *outputfile) {
   printf("PROCESS GET SKELETON CODE CALLED.  Fill me in!  (%s, %s)\n", 
 	chunkfile, outputfile);
 
-  char sendBuf[BUFLEN];
-  fill_header(&sendBuf, WHOHAS, 60, 0, 0);
+  char *sendBuf = (char*) malloc(BUFLEN);
+
   unsigned short packet_length = ntohs(*(unsigned short*)(sendBuf+6));
 
   FILE *f = fopen(chunkfile, "r");
   char line[255];
-  unsigned short chunk_count = 0;
+  char chunk_count = 0;
   unsigned int id;
-    uint8_t hash[SHA1_HASH_SIZE*2+1];
-  	uint8_t binary_hash[SHA1_HASH_SIZE];
+  uint8_t hash[SHA1_HASH_SIZE*2+1];
+  uint8_t binary_hash[SHA1_HASH_SIZE];
+  struct bt_peer_s* peer;
+  struct sockaddr* dst_addr;
+  // printf("len:%d, %s\n", packet_length, sendBuf);
 
   while (fgets(line, 255, f) != NULL) {
     if (line[0] == '#'){
@@ -131,23 +133,40 @@ void process_get(char *chunkfile, char *outputfile) {
     hex2binary((char*)hash, SHA1_HASH_SIZE*2, binary_hash);
     memcpy(sendBuf + 20 + 20 * chunk_count, (char*)binary_hash, sizeof(binary_hash));
     chunk_count++;
-    if(chunk_count >= 74 ) {
-    	printf("should split packets\n");
+    if(chunk_count >= 74 ) { //reached the maximum size of a packet
+    	printf("WHOHAS packet has 74 chunks\n");
+    	fill_header(sendBuf, WHOHAS, 1500, 0, 0);
+    	*(sendBuf + 16) = chunk_count;
+    	peer = config.peers;
+	    while(peer!=NULL) {
+	        if(peer->id==config.identity){
+	          peer = peer->next;
+	        }
+	        else{
+	          dst_addr = (struct sockaddr*)&peer->addr;
+	          spiffy_sendto(sock, sendBuf, 1500, 0, dst_addr, sizeof(*dst_addr));
+	          peer = peer->next;
+	        }
+	    }
+	    memset(sendBuf, 0, BUFLEN);
+    	chunk_count = 0;
     }
   }
   fclose(f);
-  memcpy(sendBuf + 16, &chunk_count, sizeof(chunk_count));
-  struct bt_peer_s* peer = config.peers;
+  *(sendBuf + 16) = chunk_count;
+  // printf("chunk_count:%d, %s\n", sendBuf[16], sendBuf);
+  	peer = config.peers;
     while(peer!=NULL) {
         if(peer->id==config.identity){
           peer = peer->next;
         }
         else{
-          struct sockaddr* dst_addr = (struct sockaddr*)&peer->addr;
+          dst_addr = (struct sockaddr*)&peer->addr;
           spiffy_sendto(sock, sendBuf, packet_length, 0, dst_addr, sizeof(*dst_addr));
           peer = peer->next;
         }
     }
+    free(sendBuf);
 }
 
 void handle_user_input(char *line, void *cbdata) {
