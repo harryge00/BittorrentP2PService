@@ -20,6 +20,15 @@ unsigned int has_chunk_number = 0;
 
 struct Request* current_request = NULL;
 
+void update_ihave_chunk_talbe(char* hash, int chunk_count){
+	//add new hash to has_chunk
+	char* tmp_has_chunk = (char*) malloc(SHA1_HASH_SIZE * (has_chunk_number + chunk_count));
+	memcpy(tmp_has_chunk, has_chunk, SHA1_HASH_SIZE * has_chunk_number);
+	memcpy(tmp_has_chunk + SHA1_HASH_SIZE * has_chunk_number, hash, chunk_count * SHA1_HASH_SIZE);
+	free(has_chunk);
+	has_chunk = tmp_has_chunk;
+}
+
 void fill_header(char* packet_header, unsigned char packet_type, 
 	unsigned short packet_length, unsigned int seq_number, unsigned int ack_number){
 	 #define HEADER_LENGTH 16
@@ -123,6 +132,7 @@ void process_inbound_udp(int sock) {
   		for(i=0;i<chunk_count;i++) {
   			uint8_t* hash = (uint8_t*)(buf+20 + i*SHA1_HASH_SIZE);
   			memcpy(request_chunks + i * SHA1_HASH_SIZE, hash, SHA1_HASH_SIZE);
+  			
   		}
   		break;
   	case GET:
@@ -304,6 +314,13 @@ void peer_run(bt_config_t *config) {
 	process_user_input(STDIN_FILENO, userbuf, handle_user_input,
 			   "Currently unused");
       }
+    }
+    if(all_chunk_finished(current_request)){
+      printf("all chunk finished, GET request DONE\n");
+      free(current_request->filename);
+      free(current_request->chunks);      
+      free(current_request);
+      current_request = NULL;
     }
   }
 }

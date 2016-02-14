@@ -48,3 +48,16 @@ struct Request* parse_has_get_chunk_file(char* chunk_file, char* output_filename
   }
   return request;
 }
+
+int all_chunk_finished(){
+  if(current_request==NULL){
+    return 0;
+  }
+  int i=0;
+  for(i=0;i<current_request->chunk_number;i++){
+    if(current_request->chunks[i].state!=OWNED){
+      return 0;
+    }
+  }
+  return 1;
+}
