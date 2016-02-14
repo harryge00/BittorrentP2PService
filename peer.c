@@ -12,28 +12,13 @@
 #include "spiffy.h"
 #include "bt_parse.h"
 #include "input_buffer.h"
-#define SHA1_HASH_SIZE 20
 
 int sock;
 bt_config_t config;
 char* has_chunk;
 unsigned int has_chunk_number = 0;
 
-struct Chunk {
-	int id;
-	uint8_t hash[SHA1_HASH_SIZE];
-	int state;	/* 0 owned, 1 receiving */
-	char* data;
-	int received_seq_number;
-	int received_byte_number;
-};
-
-struct Request{
-	char* chunk_file; //the file name of (GET chunk_file tarFile)
-    int chunk_number;
-    struct Chunk* chunks;
-};
-Request* current_request;
+struct Request* current_request = NULL;
 
 void fill_header(char* packet_header, unsigned char packet_type, 
 	unsigned short packet_length, unsigned int seq_number, unsigned int ack_number){
@@ -161,6 +146,12 @@ void process_inbound_udp(int sock) {
 void process_get(char *chunkfile, char *outputfile) {
   printf("PROCESS GET SKELETON CODE CALLED.  Fill me in!  (%s, %s)\n", 
 	chunkfile, outputfile);
+
+  if(current_request != NULL) {
+  	printf("previous request:%s, %d", current_request->chunk_file, current_request->chunk_number);
+  }
+
+  current_request = parse_has_get_chunk_file(chunkfile, outputfile);
 
   char *sendBuf = (char*) malloc(BUFLEN);
 
