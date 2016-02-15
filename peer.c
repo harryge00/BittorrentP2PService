@@ -7,17 +7,11 @@
 #include <string.h>
 #include "debug.h"
 #include "chunk.h"
-
+#include <stdbool.h>
 #include "common.h"
 #include "spiffy.h"
 #include "bt_parse.h"
 #include "input_buffer.h"
-
-int sock;
-bt_config_t config;
-
-struct Request* current_request = NULL;
-struct Request* has_chunk_table = NULL;
 
 struct source_chunk {
 	struct sockaddr peer_addr;
@@ -28,31 +22,11 @@ struct source_chunk {
 };
 
 struct source_chunk* download_waiting_queue = NULL;
-
-void fill_header(char* packet_header, unsigned char packet_type, 
-	unsigned short packet_length, unsigned int seq_number, unsigned int ack_number){
-	 #define HEADER_LENGTH 16
-  unsigned short magic_number = 15441;
-  unsigned char version_number = 1;
-  short header_length = 16;
-  *(unsigned short*)(packet_header) = htons(magic_number);
-  *(unsigned char*)(packet_header+2) = version_number;
-  *(unsigned char*)(packet_header+3) = packet_type;
-  *(unsigned short*)(packet_header+4) = htons(header_length);
-  *(unsigned short*)(packet_header+6) = htons(packet_length);
-  *(unsigned int*)(packet_header+8) = htonl(seq_number);
-  *(unsigned int*)(packet_header+12) = htonl(ack_number);
-}
-
-int find_chunk(uint8_t* hash){
-  int i = 0;
-  for(i = 0; i < has_chunk_table->chunk_number; i++){
-    if (memcmp(hash, has_chunk_table->chunks[i].hash, SHA1_HASH_SIZE) == 0) {
-      return 1;
-    }
-  }
-  return -1;
-}
+int upload_chunk_id;
+bool uploading = false;
+struct sockaddr upload_addr;
+int upload_sock;
+int sent_seq_number, sent_byte_number;
 
 void peer_run(bt_config_t *config);
 
@@ -104,7 +78,7 @@ void process_inbound_udp(int sock) {
 	 inet_ntoa(from.sin_addr),
 	 ntohs(from.sin_port),
 	 buf);
-  int i;
+  int i, chunk_id;
   char chunk_count;
   struct sockaddr* dst_addr;
   uint8_t* hash;
@@ -115,7 +89,7 @@ void process_inbound_udp(int sock) {
   		char matched_count = 0;
   		for(i=0;i<chunk_count;i++) {
 	        hash = (uint8_t*)(buf+20 + i*SHA1_HASH_SIZE);
-	        if(find_chunk(hash)>0){
+	        if(find_chunk(hash)>=0){
 	          memcpy(sendBuf + 20 + matched_count * SHA1_HASH_SIZE, hash, SHA1_HASH_SIZE);
 	          matched_count++;
 	        }
@@ -137,12 +111,14 @@ void process_inbound_udp(int sock) {
   				memcpy(download_waiting_queue->hash, hash, SHA1_HASH_SIZE);
   				download_waiting_queue->next = NULL;
   				download_waiting_queue->sock = sock;
-  				download_waiting_queue->state = RECEVING;
-  				download_waiting_queue->peer_addr = (struct sockaddr)from;
+  				download_waiting_queue->peer_addr = *(struct sockaddr*)&from;
   				fill_header(sendBuf, GET, 36, 0, 0);
   				memcpy(sendBuf+16, hash, SHA1_HASH_SIZE);
+  				chunk_id = get_chunk_id(hash, current_request);
+  				current_request->chunks[chunk_id].state=RECEIVING;
   				dst_addr = (struct sockaddr*)&from;
 	    		spiffy_sendto(sock, sendBuf, 36, 0, dst_addr, sizeof(*dst_addr));
+  				download_waiting_queue->state = RECEIVING;
   			} else {
   				struct source_chunk* p_chunk = download_waiting_queue;
   				while(1) {
@@ -157,7 +133,7 @@ void process_inbound_udp(int sock) {
 		  				p_chunk->next = NULL;
 		  				p_chunk->sock = sock;
 		  				p_chunk->state = NOT_STARTED;
-		  				p_chunk->peer_addr = (struct sockaddr)from;
+		  				p_chunk->peer_addr = *(struct sockaddr*)&from;
   					} else {
   						p_chunk = p_chunk->next;
   					}
@@ -168,13 +144,45 @@ void process_inbound_udp(int sock) {
   	case GET:
   		printf("receive GET\n");
   		memcpy(hash, buf+16, SHA1_HASH_SIZE);
-  		
+  		upload_chunk_id = find_chunk(hash);
+  		sent_seq_number = 0; 
+  		sent_byte_number = 0;
+  		upload_sock = sock;
+  		upload_addr = *(struct sockaddr*) &from;
   		break;
   	case DATA:
   		printf("receive DATA\n");
+  		struct source_chunk* p_chunk = download_waiting_queue;
+		while(p_chunk != NULL) {
+			if(p_chunk->state == RECEIVING) {
+				hash = p_chunk->hash;
+				break;
+			}
+			p_chunk = p_chunk->next;
+		}
+		chunk_id = get_chunk_id(hash, current_request);
+  		save_data_packet(buf, chunk_id);
+  		current_request->chunks[chunk_id].received_seq_number = seq_number;
+  		fill_header(sendBuf, ACK, 16, 0, seq_number);
+  		dst_addr = (struct sockaddr*) &from;
+  		spiffy_sendto(sock, sendBuf, 16, 0, dst_addr, sizeof(*dst_addr));
+  		if(save_chunk() > 0) {
+  			p_chunk->state = OWNED;
+  			p_chunk = p_chunk->next;
+  			if(p_chunk == NULL) {
+  				printf("finished downloading request\n");
+  			} else {
+  				p_chunk->state = RECEIVING;
+  				memset(sendBuf, 0, 16);
+  				fill_header(sendBuf, GET, 36, 0, 0);
+  				memcpy(sendBuf+16, p_chunk->hash, SHA1_HASH_SIZE);
+  				dst_addr = &p_chunk->peer_addr;
+  				spiffy_sendto(sock, sendBuf, 16, 0, dst_addr, sizeof(*dst_addr));
+  			}
+  		}
   		break;
   	case ACK:
-  		printf("receive ACK\n");
+  		printf("receive ACK %d\n", ack_number);
   		break;
   	case DENIED:
   		printf("receive DENIED\n");
@@ -190,7 +198,7 @@ void process_get(char *chunkfile, char *outputfile) {
 	chunkfile, outputfile);
 
   if(current_request != NULL) {
-  	printf("previous request:%s, %d", current_request->chunk_file, current_request->chunk_number);
+  	printf("previous request:%s, %d", current_request->filename, current_request->chunk_number);
   }
 
   current_request = parse_has_get_chunk_file(chunkfile, outputfile);
@@ -270,7 +278,22 @@ void handle_user_input(char *line, void *cbdata) {
     }
   }
 }
-
+void send_data_packet() {
+	char* sendBuf = (char*) malloc(BUFLEN);
+	int data_length;
+	if(sent_byte_number + MAX_DATA_PACKET_SIZE > BT_CHUNK_SIZE) {
+		data_length = sent_byte_number + MAX_DATA_PACKET_SIZE - BT_CHUNK_SIZE;
+	} else {
+		data_length = MAX_DATA_PACKET_SIZE;
+	}
+	fill_header(sendBuf, DATA, data_length + 16, sent_seq_number + 1, 0);
+	read_file(has_chunk_table->filename, sendBuf, data_length, 
+		upload_chunk_id * BT_CHUNK_SIZE + sent_byte_number);
+	printf("sending data %d (%d)\n", sent_seq_number + 1, sent_byte_number);
+	spiffy_sendto(upload_sock, sendBuf, data_length+16, 0, &upload_addr, sizeof(upload_addr));
+	sent_seq_number++;
+	sent_byte_number += data_length;
+}
 void peer_run(bt_config_t *config) {
 
   struct sockaddr_in myaddr;
@@ -301,8 +324,14 @@ void peer_run(bt_config_t *config) {
   printf("init OK\n");
   //parse_chunk_file(config->has_chunk_file);
   has_chunk_table = parse_has_get_chunk_file(config->has_chunk_file, NULL);
+  total_chunk_table = parse_total_chunk_file(config->chunk_file, NULL);
   printf("Parsed Ok\n");
 
+  char read_buffer[MAX_LINE_LENGTH];
+  FILE* master_chunk_file = fopen(config->chunk_file, "r");
+  fgets(read_buffer, MAX_LINE_LENGTH, master_chunk_file);
+  fclose(master_chunk_file);
+  memset(master_data_file_name, 0, FILE_NAME_SIZE);
   sscanf(read_buffer, "File:%s", master_data_file_name);
   printf("master_data_file_name: %s\n", master_data_file_name);
 
@@ -322,6 +351,9 @@ void peer_run(bt_config_t *config) {
 	process_user_input(STDIN_FILENO, userbuf, handle_user_input,
 			   "Currently unused");
       }
+    }
+    if(uploading) {
+    	send_data_packet();
     }
     if(all_chunk_finished(current_request)){
       printf("all chunk finished, GET request DONE\n");
