@@ -61,3 +61,18 @@ int all_chunk_finished(){
   }
   return 1;
 }
+
+/* read from file, write to buf, starting from offset and writing continous
+ * length bytes */
+int read_file(char * filename, char * buf, int length, int offset) {
+  int ret;
+  int fd = open(filename, O_RDWR|O_CREAT, 0640);
+  if(fd < 0)
+    printf("Open file error!\n");
+  lseek(fd, offset, SEEK_SET); /* assume good input */
+  ret = read(fd, buf, length);
+  int rc;
+  if ((rc = close(fd)) < 0)
+    printf("close file error\n");
+  return ret;
+}
