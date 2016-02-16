@@ -102,12 +102,22 @@ struct Request* parse_total_chunk_file(char* chunk_file, char* output_filename){
   return request;
 }
 
+void print_hash(uint8_t* hash){
+  if(hash==NULL){
+    printf("Hash is NULL\n");
+    return;
+  }
+  char hash_buffer[SHA1_HASH_SIZE * 2 + 1];
+  binary2hex(hash, SHA1_HASH_SIZE, hash_buffer);
+  printf("Hash: %s\n", hash_buffer);
+}
+
 
 /* open or create a file */
 int open_file(char * filename) {
   int fd = open(filename, O_RDWR|O_CREAT, 0640);
   if(fd < 0)
-    printf("Open file error!\n");
+    printf("Open file %s error!\n", filename);
   return fd;
 }
 
@@ -203,7 +213,8 @@ int all_chunk_finished(){
 int save_chunk(int chunk_id){
   char* filename = NULL;
   struct Chunk* chunk = &current_request->chunks[chunk_id];
-  if(chunk->received_byte_number == BT_CHUNK_SIZE&&chunk->state!=OWNED){
+  printf("recvBytes %d\n", chunk->received_byte_number);
+  if(chunk->received_byte_number >= BT_CHUNK_SIZE && chunk->state!=OWNED){
     chunk -> state = OWNED;
     // verify chunk
     uint8_t hash[SHA1_HASH_SIZE];
@@ -263,6 +274,7 @@ void save_data_packet(char* recvBuf, int chunk_id){
   chunk->received_seq_number = seq_number;
   memcpy(chunk->data + chunk->received_byte_number, recvBuf + header_length, data_size);
   chunk->received_byte_number = chunk->received_byte_number + data_size;
+  // printf("recvBytes:%d\n", chunk->received_byte_number);
 }
 
 void update_ihave_table(struct Chunk* chunk){

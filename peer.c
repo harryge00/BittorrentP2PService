@@ -71,13 +71,12 @@ void process_inbound_udp(int sock) {
   unsigned int seq_number =ntohl(*(unsigned int*)(buf+8));
   unsigned int ack_number = ntohl(*(unsigned int*)(buf+12));
 
-  printf("%d,%d,%d\n", magic_number, packet_version, packet_type);
-  printf("%d,%d\n", packet_header_len, packet_len); 
-  printf("PROCESS_INBOUND_UDP SKELETON -- replace!\n"
-	 "Incoming message from %s:%d\n%s\n\n", 
-	 inet_ntoa(from.sin_addr),
-	 ntohs(from.sin_port),
-	 buf);
+  // printf("%d,%d,%d\n", magic_number, packet_version, packet_type);
+  // printf("%d,%d\n", packet_header_len, packet_len); 
+  // printf("PROCESS_INBOUND_UDP SKELETON -- replace!\n"
+	 // "Incoming message from %s:%d\n\n", 
+	 // inet_ntoa(from.sin_addr),
+	 // ntohs(from.sin_port));
   int i, chunk_id;
   char chunk_count;
   struct sockaddr* dst_addr;
@@ -106,6 +105,7 @@ void process_inbound_udp(int sock) {
   		chunk_count = buf[16];
   		for(i=0;i<chunk_count;i++) {
   			hash = (uint8_t*)(buf+20 + i*SHA1_HASH_SIZE);
+  			print_hash(hash);
   			if(download_waiting_queue == NULL) {
   				download_waiting_queue = (struct source_chunk*) malloc(sizeof(struct source_chunk));
   				memcpy(download_waiting_queue->hash, hash, SHA1_HASH_SIZE);
@@ -123,7 +123,8 @@ void process_inbound_udp(int sock) {
   				struct source_chunk* p_chunk = download_waiting_queue;
   				while(1) {
   					if(memcmp(hash, p_chunk->hash, SHA1_HASH_SIZE) == 0) {
-  						printf("another peer also has %s\n", (char*)hash);
+  						printf("another peer also has ");
+  						print_hash(hash);
   						break;
   					}
   					if(p_chunk->next == NULL) {
@@ -134,6 +135,7 @@ void process_inbound_udp(int sock) {
 		  				p_chunk->sock = sock;
 		  				p_chunk->state = NOT_STARTED;
 		  				p_chunk->peer_addr = *(struct sockaddr*)&from;
+		  				break;
   					} else {
   						p_chunk = p_chunk->next;
   					}
@@ -142,8 +144,10 @@ void process_inbound_udp(int sock) {
   		}
   		break;
   	case GET:
-  		printf("receive GET\n");
+  		printf("receive GET from sock %d\n", sock);
   		memcpy(hash, buf+16, SHA1_HASH_SIZE);
+  		print_hash(hash);
+  		uploading = true;
   		upload_chunk_id = find_chunk(hash);
   		sent_seq_number = 0; 
   		sent_byte_number = 0;
@@ -151,7 +155,8 @@ void process_inbound_udp(int sock) {
   		upload_addr = *(struct sockaddr*) &from;
   		break;
   	case DATA:
-  		printf("receive DATA\n");
+  		printf("receive DATA %d, len %d\n", seq_number, packet_len-16);
+  		hash = NULL;
   		struct source_chunk* p_chunk = download_waiting_queue;
 		while(p_chunk != NULL) {
 			if(p_chunk->state == RECEIVING) {
@@ -160,13 +165,14 @@ void process_inbound_udp(int sock) {
 			}
 			p_chunk = p_chunk->next;
 		}
+		print_hash(hash);
 		chunk_id = get_chunk_id(hash, current_request);
   		save_data_packet(buf, chunk_id);
-  		current_request->chunks[chunk_id].received_seq_number = seq_number;
   		fill_header(sendBuf, ACK, 16, 0, seq_number);
   		dst_addr = (struct sockaddr*) &from;
   		spiffy_sendto(sock, sendBuf, 16, 0, dst_addr, sizeof(*dst_addr));
-  		if(save_chunk() > 0) {
+  		if(save_chunk(chunk_id) > 0) {
+  			printf("one chunk ok\n ");
   			p_chunk->state = OWNED;
   			p_chunk = p_chunk->next;
   			if(p_chunk == NULL) {
@@ -180,9 +186,14 @@ void process_inbound_udp(int sock) {
   				spiffy_sendto(sock, sendBuf, 16, 0, dst_addr, sizeof(*dst_addr));
   			}
   		}
+  		// printf("sent data\n");
   		break;
   	case ACK:
   		printf("receive ACK %d\n", ack_number);
+  		if(sent_byte_number >= BT_CHUNK_SIZE) {
+  			printf("finished uploading\n");
+  			uploading = false;
+  		}
   		break;
   	case DENIED:
   		printf("receive DENIED\n");
@@ -278,22 +289,27 @@ void handle_user_input(char *line, void *cbdata) {
     }
   }
 }
+
 void send_data_packet() {
 	char* sendBuf = (char*) malloc(BUFLEN);
 	int data_length;
+	if(sent_byte_number >= BT_CHUNK_SIZE) {
+		return;
+	}
 	if(sent_byte_number + MAX_DATA_PACKET_SIZE > BT_CHUNK_SIZE) {
-		data_length = sent_byte_number + MAX_DATA_PACKET_SIZE - BT_CHUNK_SIZE;
+		data_length = BT_CHUNK_SIZE - sent_byte_number;
 	} else {
 		data_length = MAX_DATA_PACKET_SIZE;
 	}
 	fill_header(sendBuf, DATA, data_length + 16, sent_seq_number + 1, 0);
-	read_file(has_chunk_table->filename, sendBuf, data_length, 
+	read_file(master_data_file_name, sendBuf + 16, data_length, 
 		upload_chunk_id * BT_CHUNK_SIZE + sent_byte_number);
-	printf("sending data %d (%d)\n", sent_seq_number + 1, sent_byte_number);
+	printf("sending data %d (%d) len %d \n", sent_seq_number + 1, sent_byte_number, data_length);
 	spiffy_sendto(upload_sock, sendBuf, data_length+16, 0, &upload_addr, sizeof(upload_addr));
 	sent_seq_number++;
 	sent_byte_number += data_length;
 }
+
 void peer_run(bt_config_t *config) {
 
   struct sockaddr_in myaddr;
@@ -309,6 +325,7 @@ void peer_run(bt_config_t *config) {
     perror("peer_run could not create socket");
     exit(-1);
   }
+  printf("mysock:%d\n", sock);
   
   bzero(&myaddr, sizeof(myaddr));
   myaddr.sin_family = AF_INET;
